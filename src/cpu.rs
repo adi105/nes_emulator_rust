@@ -16,6 +16,9 @@ bitflags! {
     }
 }
 
+// const to refer to when resetting stack pointer
+const STACK_RST: u8 = 0xFD;
+
 pub struct CPU {
     // accumulator
     pub reg_a: u8,
@@ -24,8 +27,9 @@ pub struct CPU {
     pub reg_y: u8,
     // status bits are in the following order on the 6502
     // NV--DIZC
-    pub status: u8,
+    pub status: Flags,
     pub program_counter: u16,
+    pub stack_ptr: u8,
     memory: [u8; 0xFFFF]
 }
 
@@ -52,8 +56,9 @@ impl CPU {
             reg_a: 0,
             reg_x: 0,
             reg_y: 0,
-            status: 0,
+            status: Flags::from_bits_truncate(0b100100),
             program_counter: 0,
+            stack_ptr: STACK_RST,
             memory: [0; 0xFFFF]
         }
     }
@@ -137,7 +142,7 @@ impl CPU {
         }
     }
 
-    // opcode implementations
+    // opcode implementations========================================
     fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         let val = self.mem_read(addr);
@@ -145,6 +150,101 @@ impl CPU {
         self.reg_a = val;
         self.set_flags(self.reg_a);
     }
+
+    fn ldx(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let val = self.mem_read(addr);
+
+        self.reg_x = val;
+        self.set_flags(self.reg_x);
+    }
+
+    fn ldy(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let val = self.mem_read(addr);
+
+        self.reg_y = val;
+        self.set_flags(self.reg_y);
+    }
+
+    fn sta(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.mem_write(addr, self.reg_a);
+    }
+
+    fn stx(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.mem_write(addr, self.reg_x);
+    }
+
+    fn sty(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.mem_write(addr, self.reg_y);
+    }
+
+    // helper function to set value of reg a
+    fn set_reg_a(&mut self, val: u8) {
+        self.reg_a = val;
+        self.set_flags(self.reg_a);
+    }
+
+    // arithmetic
+    // to implement arithmetic operations, most use the same steps. We will export these steps to a helper function
+    fn addition_reg_a(&mut self, data: u8) {
+        let temp = self.reg_a as u16 + data as u16 + (if self.status.contains(Flags::CARRY) { 1 } else { 0 }) as u16;
+        // set carry flag if necessary
+        let carryflag = temp > 0xFF;
+        if carryflag {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        let val = temp as u8;
+
+        // test for overflow, niche way to determine if V flag must be set using bitwise XOR.
+        if (data ^ val) & (val ^ self.reg_a) & 0x80 != 0 {
+            self.status.insert(Flags::OVERFLOW);
+        } else {
+            self.status.remove(Flags::OVERFLOW);
+        }
+
+        self.set_reg_a(val);
+    }
+
+    fn adc(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        self.addition_reg_a(data);
+    }
+
+    fn sbc(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        // subtraction can utilize addition function
+        // a - b is the same as a + (-b), where -b = !b + 1
+        self.addition_reg_a(((data as i8).wrapping_neg().wrapping_sub(1)) as u8);
+        //          cast to 8b int, use wrapping neg to invert, add 1, cast to u8
+    }
+
+    fn and(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        self.set_reg_a(data & self.reg_a);
+    }
+
+    fn eor(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        self.set_reg_a(data ^ self.reg_a);
+    }
+
+    fn ora(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        self.set_reg_a(data | self.reg_a);
+    }
+    
 
     fn tax(&mut self) {
         self.reg_x = self.reg_a;
@@ -155,20 +255,21 @@ impl CPU {
         self.reg_x = self.reg_x.wrapping_add(1);
         self.set_flags(self.reg_x)
     }
+    //===============================================================
 
     fn set_flags(&mut self, result:u8) {
         // set the 0 flag
         if result == 0 {
-            self.status = self.status | 0b0000_0010;
+            self.status.insert(Flags::ZERO);
         } else {
-            self.status = self.status & 0b1111_1101;
+            self.status.remove(Flags::ZERO);
         }
 
         // set the n flag
         if result & 0b1000_0000 != 0 {
-            self.status = self.status | 0b1000_0000;
+            self.status.insert(Flags::NEGATIVE);
         } else {
-            self.status = self.status & 0b0111_1111;
+            self.status.remove(Flags::NEGATIVE);
         }
     }
 
@@ -214,8 +315,10 @@ impl CPU {
         self.reg_a = 0;
         self.reg_x = 0;
         self.reg_y = 0;
-        self.status = 0;
+        self.status = Flags::from_bits_truncate(0b100100);
         self.program_counter = self.mem_read_u16(0xFFFC);
+        self.stack_ptr = STACK_RST;
+        self.memory = [0; 0xFFFF];
     }
 
     pub fn run(&mut self) {
@@ -270,8 +373,8 @@ mod test {
         // LDA 0x05
         // BRK
         assert_eq!(cpu.reg_a, 0x05);                // accumulator is set to 0x05
-        assert!(cpu.status & 0b0000_0010 == 0);     // zero flag is not set
-        assert!(cpu.status & 0b1000_0000 == 0);     // neg flag is not set
+        assert!(cpu.status.bits() & 0b0000_0010 == 0);     // zero flag is not set
+        assert!(cpu.status.bits() & 0b1000_0000 == 0);     // neg flag is not set
     }
 
     #[test]
@@ -281,7 +384,7 @@ mod test {
         // LDA 0x00
         // BRK
         assert_eq!(cpu.reg_a, 0x00);                // accumulator set to 0x00
-        assert!(cpu.status & 0b0000_0010 == 0b10)   // zero flag is set
+        assert!(cpu.status.bits() & 0b0000_0010 == 0b10)   // zero flag is set
     }
 
     #[test]
@@ -292,8 +395,8 @@ mod test {
         // TAX
         // BRK
         assert_eq!(cpu.reg_x, 0x05);                // reg x set to 0x05
-        assert!(cpu.status & 0b0000_0010 == 0);     // zero flag is not set
-        assert!(cpu.status & 0b1000_0000 == 0);     // neg flag is not set
+        assert!(cpu.status.bits() & 0b0000_0010 == 0);     // zero flag is not set
+        assert!(cpu.status.bits() & 0b1000_0000 == 0);     // neg flag is not set
     }
 
     #[test]
@@ -303,7 +406,7 @@ mod test {
         // TAX
         // BRK
         assert_eq!(cpu.reg_x, 0x00);                // reg x set to 0x00
-        assert!(cpu.status & 0b0000_0010 == 0b10)   // zero flag is set
+        assert!(cpu.status.bits() & 0b0000_0010 == 0b10)   // zero flag is set
     }
 
     #[test]
