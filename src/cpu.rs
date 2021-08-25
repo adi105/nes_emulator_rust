@@ -143,6 +143,16 @@ impl CPU {
     }
 
     // opcode implementations========================================
+    // unique
+    fn brk(&mut self) {
+        todo!();
+    }
+
+    fn nop(&mut self) {
+        todo!();
+    }
+
+    // memory
     fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         let val = self.mem_read(addr);
@@ -251,10 +261,270 @@ impl CPU {
         self.set_flags(self.reg_x);
     }
 
+    fn tay(&mut self) {
+        self.reg_y = self.reg_a;
+        self.set_flags(self.reg_y);
+    }
+
     fn inx(&mut self) {
         self.reg_x = self.reg_x.wrapping_add(1);
         self.set_flags(self.reg_x)
     }
+
+    // bitshifting
+    fn asl(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        // check for carry
+        if data >> 7 == 1 {
+            // set carry flag
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        // perform the shift
+        data = data << 1;
+        self.mem_write(addr, data);
+        self.set_flags(data);
+        data
+    }
+
+    // shifting regarding accumulator (no data fetches)
+    fn asl_reg_a(&mut self) {
+        let mut data = self.reg_a;
+        // check for carry
+        if data >> 7 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data << 1;
+        self.set_reg_a(data);
+    }
+
+    fn lsr(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        // check for carry
+        if data & 1 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data >> 1;
+        self.mem_write(addr, data);
+        self.set_flags(data);
+        data
+    }
+
+    fn lsr_reg_a(&mut self) {
+        let mut data = self.reg_a;
+        // carry check
+        if data & 1 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data >> 1;
+        self.set_reg_a(data);
+    }
+
+    fn rol(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        let carry_set = self.status.contains(Flags::CARRY);
+        
+        // check for carry bit
+        if data >> 7 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data << 1;
+        if carry_set {
+            // set bit 0 to 1
+            data = data | 1;
+        }
+        self.mem_write(addr, data);
+        self.set_flags(data);
+        data
+    }
+
+    fn rol_reg_a(&mut self) {
+        let mut data = self.reg_a;
+        let carry_set = self.status.contains(Flags::CARRY);
+
+        //check for carry bit
+        if data >> 7 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data << 1;
+        if carry_set {
+            data = data | 1;
+        }
+        self.set_reg_a(data);
+    }
+
+    fn ror(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        let carry_set = self.status.contains(Flags::CARRY);
+
+        // check for carry bit
+        if data & 1 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data >> 1;
+        if carry_set {
+            data = data | 0b1000_0000;
+        }
+        self.mem_write(addr, data);
+        self.set_flags(data);
+        data
+    }
+
+    fn ror_reg_a(&mut self) {
+        let mut data = self.reg_a;
+        let carry_set = self.status.contains(Flags::CARRY);
+
+        // check for carry bit
+        if data & 1 == 1 {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        data = data >> 1;
+        if carry_set {
+            data = data | 0b1000_0000;
+        }
+        self.set_reg_a(data);
+    }
+
+    fn inc(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+
+        // add 1 using wrapping add
+        data = data.wrapping_add(1);
+        self.mem_write(addr, data);
+        self.set_flags(data);
+        data
+    }
+
+    fn dec(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+
+        //subtract 1 using wrapping sub
+        data = data.wrapping_sub(1);
+        self.mem_write(addr, data);
+        self.set_flags(data);
+        data
+    }
+
+    fn dex(&mut self) {
+        self.reg_x = self.reg_x.wrapping_sub(1);
+        self.set_flags(self.reg_x);
+    }
+
+    fn dey(&mut self) {
+        self.reg_y = self.reg_y.wrapping_sub(1);
+        self.set_flags(self.reg_y);
+    }
+
+    fn cmp(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+
+        let val = self.reg_a.wrapping_sub(data);
+
+        // set carry flag
+        if self.reg_a >= data {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        self.set_flags(val);
+    }
+
+    fn cpx(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+
+        let val = self.reg_x.wrapping_sub(data);
+
+        // set carry flag
+        if self.reg_x >= data {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        self.set_flags(val);
+    }
+
+    fn cpy(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        let val = self.reg_y.wrapping_sub(data);
+
+        // set carry flag
+        if self.reg_y >= data {
+            self.status.insert(Flags::CARRY);
+        } else {
+            self.status.remove(Flags::CARRY);
+        }
+
+        self.set_flags(val);
+    }
+
+    // branch with condition to be used for all branch opcodes
+    fn branch(&mut self, cond: bool) {
+        if cond {
+            // calculate location to jump to
+            let jump:i8 = self.mem_read(self.program_counter) as i8;
+            let jmp_addr = self.program_counter.wrapping_add(1).wrapping_add(jump as u16);
+            // set pc to location
+            self.program_counter = jmp_addr;
+        }
+    }
+
+    fn bit(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let data = self.mem_read(addr);
+        // apply mask
+        let masked = self.reg_a & data;
+        // set Z flag
+        if masked == 0 {
+            self.status.insert(Flags::ZERO);
+        } else {
+            self.status.remove(Flags::ZERO);
+        }
+
+        // BIT opcode sets the value of negative and overflow bits to bit 7 and 6 of mask, respectively
+        self.status.set(Flags::NEGATIVE, data & 0b1000_0000 > 0);
+        self.status.set(Flags::OVERFLOW, data & 0b0100_0000 > 0);
+    }
+
+    // stack stuff
+
+    fn pla(&mut self) {
+        todo!();
+    }
+
     //===============================================================
 
     fn set_flags(&mut self, result:u8) {
