@@ -17,6 +17,7 @@ bitflags! {
 }
 
 // const to refer to when resetting stack pointer
+const STACK: u16 = 0x0100;
 const STACK_RST: u8 = 0xFD;
 
 pub struct CPU {
@@ -143,15 +144,6 @@ impl CPU {
     }
 
     // opcode implementations========================================
-    // unique
-    fn brk(&mut self) {
-        todo!();
-    }
-
-    fn nop(&mut self) {
-        todo!();
-    }
-
     // memory
     fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
@@ -423,6 +415,11 @@ impl CPU {
         data
     }
 
+    fn iny(&mut self) {
+        self.reg_y = self.reg_y.wrapping_add(1);
+        self.set_flags(self.reg_y);
+    }
+
     fn dec(&mut self, mode: &AddressingMode) -> u8 {
         let addr = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
@@ -519,12 +516,55 @@ impl CPU {
         self.status.set(Flags::OVERFLOW, data & 0b0100_0000 > 0);
     }
 
-    // stack stuff
-
-    fn pla(&mut self) {
-        todo!();
+    // stack helper functions
+    fn stack_push(&mut self, data: u8) {
+        // write to the stack using STACK constant + offset
+        self.mem_write((STACK as u16) + self.stack_ptr as u16, data);
+        self.stack_ptr = self.stack_ptr.wrapping_sub(1);
     }
 
+    fn stack_pop(&mut self) -> u8 {
+        // read from stack using STACK const + offset
+        self.stack_ptr = self.stack_ptr.wrapping_add(1);
+        self.mem_read((STACK as u16) + self.stack_ptr as u16)
+    }
+
+    fn stack_push_u16(&mut self, data: u16) {
+        // separate high order and low order bytes
+        let high_order = (data >> 8) as u8;
+        let low_order = (data & 0xFF) as u8;
+        // push high order fist
+        self.stack_push(high_order);
+        self.stack_push(low_order);
+    }
+
+    fn stack_pop_u16(&mut self) -> u16 {
+        let low_order = self.stack_pop() as u16;
+        let high_order = self.stack_pop() as u16;
+        // combine
+        let val = high_order << 8 | low_order;
+        val
+    }
+
+    // stack opcodes
+    fn pla(&mut self) {
+        let data = self.stack_pop();
+        self.set_reg_a(data);
+    }
+
+    fn plp(&mut self) {
+        self.status.bits = self.stack_pop();
+        self.status.remove(Flags::BREAK);
+        self.status.insert(Flags::BREAK2);
+    }
+
+    fn php(&mut self) {
+        let mut flags_to_push = self.status.clone();
+        // php opcode sets B flags to 1
+        flags_to_push.insert(Flags::BREAK);
+        flags_to_push.insert(Flags::BREAK2);
+        self.stack_push(flags_to_push.bits);
+    }
     //===============================================================
 
     fn set_flags(&mut self, result:u8) {
@@ -604,21 +644,273 @@ impl CPU {
             let opcode = opcodes.get(&code).expect(&format!("OpCode {:x} is not recognized", code));
 
             match code {
+                // LDA
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&opcode.mode);
                 }
-                // BRK (0x00)
+                // BRK
                 0x00 => {
                     return;
                 }
-                // TAX (0xAA)
+                //NOP
+                0xea => {
+                    // nothing
+                }
+                // LDX
+                0xa2 | 0xa6 | 0xb6 | 0xae | 0xbe => {
+                    self.ldx(&opcode.mode);
+                }
+                // LDY
+                0xa0 | 0xa4 | 0xb4 | 0xac | 0xbc => {
+                    self.ldy(&opcode.mode);
+                }
+                // STA
+                0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
+                    self.sta(&opcode.mode);
+                }
+                // STX
+                0x86 | 0x96 | 0x8e => {
+                    self.stx(&opcode.mode);
+                }
+                // STY
+                0x84 | 0x94 | 0x8c => {
+                    self.sty(&opcode.mode);
+                }
+                // ADC
+                0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
+                    self.adc(&opcode.mode);
+                }
+                // SBC
+                0xe9 | 0xe5 | 0xf5 | 0xed | 0xfd | 0xf9 | 0xe1 | 0xf1 => {
+                    self.sbc(&opcode.mode);
+                }
+                // AND
+                0x29 | 0x25 | 0x35 | 0x2d | 0x3d | 0x39 | 0x21 | 0x31 => {
+                    self.and(&opcode.mode);
+                }
+                // EOR
+                0x49 | 0x45 | 0x55 | 0x4d | 0x5d | 0x59 | 0x41 | 0x51 => {
+                    self.eor(&opcode.mode);
+                }
+                // ORA
+                0x09 | 0x05 | 0x15 | 0x0d | 0x1d | 0x19 | 0x01 | 0x11 => {
+                    self.ora(&opcode.mode);
+                }
+                // TAX
                 0xAA => {
                     self.tax();
                 }
-                //INX (0xe8)
+                // TAY
+                0xa8 => {
+                    self.tay();
+                }
+                //INX
                 0xe8 => {
                     self.inx();
                 }
+                // ASL
+                0x0a => {
+                    self.asl_reg_a();
+                }
+                0x06 | 0x16 | 0x0e | 0x1e => {
+                    self.asl(&opcode.mode);
+                }
+                // LSR
+                0x4a => {
+                    self.lsr_reg_a();
+                }
+                0x46 | 0x56 | 0x4e | 0x5e => {
+                    self.lsr(&opcode.mode);
+                }
+                // ROL
+                0x2a => {
+                    self.rol_reg_a();
+                }
+                0x26 | 0x36 | 0x2e | 0x3e => {
+                    self.rol(&opcode.mode);
+                }
+                // ROR
+                0x6a => {
+                    self.ror_reg_a();
+                }
+                0x66 | 0x76 | 0x6e | 0x7e => {
+                    self.ror(&opcode.mode);
+                }
+                // INC
+                0xe6 | 0xf6 | 0xee | 0xfe => {
+                    self.inc(&opcode.mode);
+                }
+                // INY
+                0xc8 => {
+                    self.iny();
+                }
+                // DEC
+                0xc6 | 0xd6 | 0xce | 0xde => {
+                    self.dec(&opcode.mode);
+                }
+                // DEX
+                0xca => {
+                    self.dex();
+                }
+                // DEY
+                0x88 => {
+                    self.dey();
+                }
+                // CMP
+                0xc9 | 0xc5 | 0xd5 | 0xcd | 0xdd | 0xd9 | 0xc1 | 0xd1 => {
+                    self.cmp(&opcode.mode);
+                }
+                // CPX
+                0xe0 | 0xe4 | 0xec => {
+                    self.cpx(&opcode.mode);
+                }
+                // CPY
+                0xc0 | 0xc4 | 0xcc => {
+                    self.cpy(&opcode.mode);
+                }
+                // (two types of JMP instructions, 6502 bug emulated)
+                // JMP ABS
+                0x4c => {
+                    let new_addr = self.mem_read_u16(self.program_counter);
+                    self.program_counter = new_addr;
+                }
+                // JMP Indirect
+                // page bug: if JMP crosses page boundary, it jumps to an unexpected location
+                0x6c => {
+                    let new_addr = self.mem_read_u16(self.program_counter);
+                    //------------------------------------------------------
+                    // if the page boundary bug takes place, we manually read the correct reference
+                    // if it does not take place, we can let mem_read_u16 work as expected
+                    let ind_reference = if new_addr & 0x00FF == 0x00FF {
+                        let low_order = self.mem_read(new_addr);
+                        let high_order = self.mem_read(new_addr & 0xFF00);
+                        (high_order as u16) << 8 | (low_order as u16)
+                    } else {
+                        self.mem_read_u16(new_addr)
+                    };
+
+                    self.program_counter = ind_reference;
+                }
+                // JSR
+                0x20 => {
+                    self.stack_push_u16(self.program_counter + 2 - 1);
+                    let target = self.mem_read_u16(self.program_counter);
+                    self.program_counter = target;
+                }
+                // RTS
+                0x60 => {
+                    self.program_counter = self.stack_pop_u16() + 1;
+                }
+                // RTI
+                // pull status from stack, followed by PC
+                0x40 => {
+                    self.status.bits = self.stack_pop();
+                    self.status.remove(Flags::BREAK);
+                    self.status.remove(Flags::BREAK2);
+
+                    self.program_counter = self.stack_pop_u16();
+                }
+                // BNE
+                0xd0 => {
+                    self.branch(!self.status.contains(Flags::ZERO));
+                }
+                // BVS
+                0x70 => {
+                    self.branch(self.status.contains(Flags::OVERFLOW));
+                }
+                // BVC
+                0x50 => {
+                    self.branch(!self.status.contains(Flags::OVERFLOW));
+                }
+                // BMI
+                0x30 => {
+                    self.branch(self.status.contains(Flags::NEGATIVE));
+                }
+                // BEQ
+                0xF0 => {
+                    self.branch(self.status.contains(Flags::ZERO));
+                }
+                // BCS
+                0xB0 => {
+                    self.branch(self.status.contains(Flags::CARRY));
+                }
+                // BCC
+                0x90 => {
+                    self.branch(!self.status.contains(Flags::CARRY));
+                }
+                // BPL
+                0x10 => {
+                    self.branch(!self.status.contains(Flags::NEGATIVE));
+                }
+                // BIT
+                0x24 | 0x2c => {
+                    self.bit(&opcode.mode);
+                }
+                // TSX
+                0xba => {
+                    self.reg_x = self.stack_ptr;
+                    self.set_flags(self.reg_x);
+                }
+                // TXA
+                0x8a => {
+                    self.reg_a = self.reg_x;
+                    self.set_flags(self.reg_a);
+                }
+                // TXS
+                0x9a => {
+                    self.stack_ptr = self.reg_x;
+                }
+                // TYA
+                0x98 => {
+                    self.reg_a = self.reg_y;
+                    self.set_flags(self.reg_a);
+                }
+                // CLD
+                0xd8 => {
+                    self.status.remove(Flags::DECIMAL);
+                }
+                // CLI
+                0x58 => {
+                    self.status.remove(Flags::INTERRUPT);
+                }
+                // CLV
+                0xb8 => {
+                    self.status.remove(Flags::OVERFLOW);
+                }
+                // CLC
+                0x18 => {
+                    self.status.remove(Flags::CARRY);
+                }
+                // SEC
+                0x38 => {
+                    self.status.insert(Flags::CARRY);
+                }
+                // SEI
+                0x78 => {
+                    self.status.insert(Flags::INTERRUPT);
+                }
+                // SED
+                0xf8 => {
+                    self.status.insert(Flags::DECIMAL);
+                }
+                // PHA
+                0x48 => {
+                    self.stack_push(self.reg_a);
+                }
+                // PLA
+                0x68 => {
+                    self.pla();
+                }
+                // PHP
+                0x08 => {
+                    self.php();
+                }
+                // PLP
+                0x28 => {
+                    self.plp();
+                }
+
+
                 // placeholder for further instructions
                 _ => todo!()
             }
