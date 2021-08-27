@@ -5,14 +5,14 @@ use std::collections::HashMap;
 // map bitflags as const masks to set easily
 bitflags! {
     pub struct Flags: u8 {
-        const CARRY =       0b0000_0001;
-        const ZERO =        0b0000_0010;
-        const INTERRUPT =   0b0000_0100;
-        const DECIMAL =     0b0000_1000;
-        const BREAK =       0b0001_0000;
-        const BREAK2 =      0b0010_0000;
-        const OVERFLOW =    0b0100_0000;
-        const NEGATIVE =    0b1000_0000;
+        const CARRY =       0b00000001;
+        const ZERO =        0b00000010;
+        const INTERRUPT =   0b00000100;
+        const DECIMAL =     0b00001000;
+        const BREAK =       0b00010000;
+        const BREAK2 =      0b00100000;
+        const OVERFLOW =    0b01000000;
+        const NEGATIVE =    0b10000000;
     }
 }
 
@@ -45,10 +45,42 @@ pub enum AddressingMode {
     ABS,
     ABX,
     ABY,
-    IND,
     IZX,
     IZY,
     NoneAddressing,
+}
+
+// implement memory functions as trait rather than directly into CPU class
+pub trait Mem {
+    fn mem_read(&self, addr: u16) -> u8;
+
+    fn mem_write(&mut self, addr: u16, data: u8);
+
+    // little endian support ==========================================
+    fn mem_read_u16(&self, pos: u16) -> u16 {
+        let low_order = self.mem_read(pos) as u16;
+        let high_order = self.mem_read(pos + 1) as u16;
+        // chain them together
+        (high_order << 8) | (low_order as u16)
+    }
+
+    fn mem_write_u16(&mut self, pos: u16, data: u16) {
+        let high_order = (data >> 8) as u8;
+        let low_order = (data & 0xFF) as u8; // using masking
+        self.mem_write(pos, low_order);
+        self.mem_write(pos+1, high_order);
+    }
+}
+
+impl Mem for CPU {
+    // memory related functions
+    fn mem_read(&self, addr: u16) -> u8 {
+        self.memory[addr as usize]
+    }
+
+    fn mem_write(&mut self, addr: u16, data: u8) {
+        self.memory[addr as usize] = data;
+    }
 }
 
 impl CPU {
@@ -60,7 +92,7 @@ impl CPU {
             status: Flags::from_bits_truncate(0b100100),
             program_counter: 0,
             stack_ptr: STACK_RST,
-            memory: [0; 0xFFFF]
+            memory: [0; 0xFFFF],
         }
     }
 
@@ -102,19 +134,6 @@ impl CPU {
                 let position = self.mem_read_u16(self.program_counter);
                 let ret = position.wrapping_add(self.reg_y as u16);
                 ret
-            }
-            // Indirect
-            AddressingMode::IND => {
-                /*
-                let base = self.mem_read_u16(self.program_counter);
-                let ptr: u8 = (base as u8);
-
-                let low_order = self.mem_read(ptr as u16);
-                let high_order = self.mem_read(ptr.wrapping_add(1) as u16);
-
-                (high_order as u16) << 8 | (low_order as u16)
-                */
-                todo!();
             }
             // Indirect off zero page with X offset
             AddressingMode::IZX => {
@@ -582,30 +601,6 @@ impl CPU {
             self.status.remove(Flags::NEGATIVE);
         }
     }
-
-    // memory related functions
-    fn mem_read(&self, addr: u16) -> u8 {
-        self.memory[addr as usize]
-    }
-
-    fn mem_write(&mut self, addr: u16, data: u8) {
-        self.memory[addr as usize] = data;
-    }
-
-    // little endian support ==========================================
-    fn mem_read_u16(&self, pos: u16) -> u16 {
-        let low_order = self.mem_read(pos) as u16;
-        let high_order = self.mem_read(pos + 1) as u16;
-        // chain them together
-        (high_order << 8) | (low_order as u16)
-    }
-
-    fn mem_write_u16(&mut self, pos: u16, data: u16) {
-        let high_order = (data >> 8) as u8;
-        let low_order = (data & 0xFF) as u8; // using masking
-        self.mem_write(pos, low_order);
-        self.mem_write(pos+1, high_order);
-    }
     //==================================================================
 
     pub fn load_run(&mut self, program: Vec<u8>) {
@@ -616,8 +611,8 @@ impl CPU {
 
     // load the program vector to mem location 0x8000 and set the program counter to this location
     pub fn load(&mut self, program: Vec<u8>) {
-        self.memory[0x8000 .. (0x8000 + program.len())].copy_from_slice(&program[..]);
-        self.mem_write_u16(0xFFFC, 0x8000);
+        self.memory[0x0600..(0x0600 + program.len())].copy_from_slice(&program[..]);
+        self.mem_write_u16(0xFFFC, 0x0600);
     }
 
     // reset function to reset registers and status, and point the program counter to 0xFFFC. Used by roms
@@ -628,10 +623,17 @@ impl CPU {
         self.status = Flags::from_bits_truncate(0b100100);
         self.program_counter = self.mem_read_u16(0xFFFC);
         self.stack_ptr = STACK_RST;
-        self.memory = [0; 0xFFFF];
+        // self.memory = [0; 0xFFFF];
     }
 
     pub fn run(&mut self) {
+        self.run_with_callback(|_| {});
+    }
+
+    pub fn run_with_callback<F>(&mut self, mut callback: F)
+    where 
+        F: FnMut(&mut CPU) 
+    {
         // hashmap of opcodes
         let ref opcodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
 
@@ -641,7 +643,7 @@ impl CPU {
             // increment program counter
             self.program_counter = self.program_counter + 1;
             let pc_state = self.program_counter;
-            let opcode = opcodes.get(&code).expect(&format!("OpCode {:x} is not recognized", code));
+            let opcode = opcodes.get(&code).unwrap();
 
             match code {
                 // LDA
@@ -919,6 +921,8 @@ impl CPU {
             if pc_state == self.program_counter {
                 self.program_counter += (opcode.length - 1) as u16;
             }
+
+            callback(self);
         }
     }
 }
@@ -931,7 +935,7 @@ mod test {
     #[test]
     fn test_lda_immediate_load() {
         let mut cpu = CPU::new();
-        cpu.load_run(vec![0xA9, 0x05, 0x00]);
+        cpu.load_run(vec![0xa9, 0x05, 0x00]);
         // LDA 0x05
         // BRK
         assert_eq!(cpu.reg_a, 0x05);                // accumulator is set to 0x05
