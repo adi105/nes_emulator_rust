@@ -1,6 +1,7 @@
 //imports
 use crate::opcodes;
 use std::collections::HashMap;
+use crate::bus::Bus;
 
 // map bitflags as const masks to set easily
 bitflags! {
@@ -31,7 +32,8 @@ pub struct CPU {
     pub status: Flags,
     pub program_counter: u16,
     pub stack_ptr: u8,
-    memory: [u8; 0xFFFF]
+    // add bus
+    pub bus: Bus,
 }
 
 #[derive(Debug)]
@@ -75,16 +77,28 @@ pub trait Mem {
 impl Mem for CPU {
     // memory related functions
     fn mem_read(&self, addr: u16) -> u8 {
-        self.memory[addr as usize]
+        self.bus.mem_read(addr)
+        //self.memory[addr as usize]
     }
 
     fn mem_write(&mut self, addr: u16, data: u8) {
-        self.memory[addr as usize] = data;
+        self.bus.mem_write(addr, data);
+        //self.memory[addr as usize] = data;
     }
+
+    
+    fn mem_read_u16(&self, pos: u16) -> u16 {
+        self.bus.mem_read_u16(pos)
+    }
+
+    fn mem_write_u16(&mut self, pos: u16, data: u16) {
+        self.bus.mem_write_u16(pos, data)
+    }
+    
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub fn new(bus: Bus) -> Self {
         CPU {
             reg_a: 0,
             reg_x: 0,
@@ -92,7 +106,7 @@ impl CPU {
             status: Flags::from_bits_truncate(0b100100),
             program_counter: 0,
             stack_ptr: STACK_RST,
-            memory: [0; 0xFFFF],
+            bus: bus,   
         }
     }
 
@@ -611,7 +625,9 @@ impl CPU {
 
     // load the program vector to mem location 0x8000 and set the program counter to this location
     pub fn load(&mut self, program: Vec<u8>) {
-        self.memory[0x0600..(0x0600 + program.len())].copy_from_slice(&program[..]);
+        for i in 0..(program.len() as u16) {
+            self.mem_write(0x600 + i, program[i as usize]);
+        }
         self.mem_write_u16(0xFFFC, 0x0600);
     }
 
@@ -921,7 +937,6 @@ impl CPU {
             if pc_state == self.program_counter {
                 self.program_counter += (opcode.length - 1) as u16;
             }
-
             callback(self);
         }
     }
@@ -934,7 +949,8 @@ mod test {
     
     #[test]
     fn test_lda_immediate_load() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.load_run(vec![0xa9, 0x05, 0x00]);
         // LDA 0x05
         // BRK
@@ -945,7 +961,8 @@ mod test {
 
     #[test]
     fn test_lda_zero_flag() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.load_run(vec![0xA9, 0x00, 0x00]);
         // LDA 0x00
         // BRK
@@ -955,7 +972,8 @@ mod test {
 
     #[test]
     fn test_tax_immediate_load() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.load_run(vec![0xA9, 0x05, 0xAA, 0x00]);
         // LDA 0x0A
         // TAX
@@ -967,7 +985,8 @@ mod test {
 
     #[test]
     fn test_tax_zero_flag() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.load_run(vec![0xAA, 0x00]);
         // TAX
         // BRK
@@ -977,7 +996,8 @@ mod test {
 
     #[test]
     fn test_inx_overflow() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.load_run(vec![0xA9, 0xFF, 0xAA, 0xe8, 0xe8, 0x00]);
         // LDA 0xFF
         // TAX
@@ -991,7 +1011,8 @@ mod test {
     
     #[test]
     fn test_mini_program() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.load_run(vec![0xA9, 0xC0, 0xAA, 0xE8, 0x00]);
         // LDA 0xC0
         // TAX
@@ -1002,7 +1023,8 @@ mod test {
 
     #[test]
     fn test_lda_imm() {
-        let mut cpu = CPU::new();
+        let bus = Bus::new();
+        let mut cpu = CPU::new(bus);
         cpu.mem_write(0x10, 0x55);
         // load program
         cpu.load_run(vec![0xA5, 0x10, 0x00]);

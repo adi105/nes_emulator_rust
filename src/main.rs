@@ -1,7 +1,10 @@
 pub mod cpu;
 pub mod opcodes;
+pub mod bus;
+
 use cpu::Mem;
 use cpu::CPU;
+use bus::Bus;
 use rand::Rng;
 use std::time::Duration;
 // SDLL
@@ -32,6 +35,7 @@ fn handle_user_input(cpu: &mut CPU, event_pump: &mut EventPump) {
                 cpu.mem_write(0xff, 0x77);
             },
             // a key
+
             Event::KeyDown { keycode: Some(Keycode::A), .. } => {
                 cpu.mem_write(0xff, 0x61);
             },
@@ -127,9 +131,11 @@ fn main() {
     ];
 
     // load the game
-    let mut cpu = CPU::new();
+    let bus = Bus::new();
+    let mut cpu = CPU::new(bus);
     cpu.load(snake_code);
     cpu.reset();
+    cpu.program_counter = 0x0600;
 
     let mut screen_state = [0 as u8; 32 * 3 * 32];
     let mut rng = rand::thread_rng();
@@ -148,6 +154,7 @@ fn main() {
         }
         //::std::thread::sleep(std::time::Duration::from_micros(10));
         let spin_sleeper = spin_sleep::SpinSleeper::new(100_000);
-        spin_sleeper.sleep(Duration::new(0, 100000));
+        spin_sleeper.sleep(Duration::new(0, 150000));
+        println!(" A: {}", cpu.reg_a);
     });
 }
